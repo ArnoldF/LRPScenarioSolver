@@ -181,11 +181,9 @@ public class LRPScenarios {
 				DepotConfiguration currentDepotConfig = new DepotConfiguration();
 				for (int i=0; i<numOpenDepots; i++) {
 					currentDepotConfig.add(possibleDepots.get(current_depot_option[i]));	
-					System.out.print(current_depot_option[i] + ",");
 				}
 				if (evaluateDepotConfiguration(currentDepotConfig, 0)){//TODO pass threshold as parameter to abort CW early
 					remainingConfigurations.add(currentDepotConfig);
-					System.out.println(currentDepotConfig.costs);
 				}
 	
 				int posToChange = numOpenDepots - 1;
@@ -248,7 +246,6 @@ public class LRPScenarios {
 		double routingCost = 0;
 		for (MDVRPModel mdvrp : customerScenarios) {
 			routingCost += mdvrp.computeSolutionCosts();
-			System.out.println("routing " + routingCost);
 		}
 		depotConfig.setCosts(routingCost + depotConfig.getOpeningCosts());
 		return true;
@@ -282,7 +279,7 @@ public class LRPScenarios {
 		
 		for (DepotConfiguration config: remainingConfigurations) {		
 			if (!evaluateDepotConfiguration(config, maxIterations))
-				System.out.println("ERROR : not sufficient capacity in optimisation stage");
+				logger.error("Depot Configuration does not sufficient capacity in optimisation stage");
 			//TODO checkINventoryConstraints();
 		}
 	}
