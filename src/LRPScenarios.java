@@ -8,8 +8,11 @@ import java.util.Arrays;
 import java.util.Calendar;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.Iterator;
+import java.util.LinkedList;
 import java.util.List;
+import java.util.Random;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
@@ -19,9 +22,11 @@ import org.json.simple.JsonArray;
 import org.json.simple.JsonObject;
 import org.json.simple.parser.JSONParser;
 import org.json.simple.parser.ParseException;
-import org.apache.log4j.Logger;
+
 import MDVRP.MDVRPModel;
 import MDVRP.Node;
+
+import org.apache.log4j.Logger;
 
 
 public class LRPScenarios {
@@ -35,13 +40,23 @@ public class LRPScenarios {
 	private ArrayList<DepotConfiguration> remainingConfigurations;
 	private static Logger logger = Logger.getLogger(LRPScenarios.class);
 	
+	private boolean isValidation;
+	private LinkedList<Double> solutionCostsPerScenario;
+	private Double confiCost;
+	private HashSet<Integer> depotIndicesInSolution;
+	private int minCapacity;
+	private double timeLimitPerIteration = 30;
 	
 	public LRPScenarios() {
 		
 		customerScenarios = new ArrayList<MDVRPModel>();
 		demandPerScenario = new ArrayList<Integer>();
+		depotIndicesInSolution = new HashSet<Integer>();
+		solutionCostsPerScenario = new LinkedList<Double>();
+		remainingConfigurations = new ArrayList<DepotConfiguration>();
+		minCapacity = 0;
+		isValidation = false;		
 	}
-	
 	
 	public void addScenario(String path) {
 		
@@ -60,7 +75,12 @@ public class LRPScenarios {
 				.sum();
 			
 			customerScenarios.add(mdvrp);
-			demandPerScenario.add(sumDemand);
+			if (minCapacity > 0) {
+				demandPerScenario.add(minCapacity);
+			}
+			else {
+				demandPerScenario.add(sumDemand);
+			}
 			logger.info("Scenario at " + path + " has been added." );
 				
 		} catch (IOException e) {
@@ -110,13 +130,26 @@ public class LRPScenarios {
 	}
 	
 	
+	public void validate() {
+		
+		try {
+			generateDepotConfigurationsFromSolution();
+			logger.info("Loaded depot configuration.");
+			evaluateDepotConfigurations(3000);
+		}
+		catch (Exception e) {
+			logger.error("An error occured during validation.");
+		}
+	}
+	
+	
 	private int computeUpperBoundOpenDepots(int scenarioID) {
 		
 		MDVRPModel mdvrp = customerScenarios.get(scenarioID);
 		
 		List<Integer> sortedCapacity = possibleDepots.stream()
 				.map(d -> d.getCapacity())
-				.sorted(Comparator.reverseOrder())
+				.sorted()
 				.collect(Collectors.toList());
 				
 		//determine minimal number of open depots, given limited depot capacity
@@ -148,7 +181,7 @@ public class LRPScenarios {
 		
 		List<Double> sortedOpeningCosts = possibleDepots.stream()
 				.map(d -> d.getOpeningCost())
-				.sorted(Comparator.reverseOrder())
+				.sorted()
 				.collect(Collectors.toList());	
 		int minNumRoutes = (int)Math.ceil((double)demandPerScenario.get(scenarioID)/mdvrp.capacityLimitVehicle);
 		
@@ -202,6 +235,16 @@ public class LRPScenarios {
 	}		
 	
 	
+	private void generateDepotConfigurationsFromSolution() {
+		
+		DepotConfiguration currentDepotConfig = new DepotConfiguration();
+		for (Integer index : depotIndicesInSolution) {
+			currentDepotConfig.add(possibleDepots.get(index));	
+		}
+		remainingConfigurations.add(currentDepotConfig);
+	}
+	
+				
 	private boolean evaluateDepotConfiguration(DepotConfiguration depotConfig, int maxIterations) {
 		
 		for (Integer demand : demandPerScenario) {		
@@ -244,10 +287,15 @@ public class LRPScenarios {
 		}
 		
 		double routingCost = 0;
+		solutionCostsPerScenario.clear();
 		for (MDVRPModel mdvrp : customerScenarios) {
 			routingCost += mdvrp.computeSolutionCosts();
+			solutionCostsPerScenario.add(mdvrp.computeSolutionCosts());
 		}
-		depotConfig.setCosts(routingCost + depotConfig.getOpeningCosts());
+		confiCost = depotConfig.getOpeningCosts();
+		double averageRoutingCost = routingCost / this.customerScenarios.size();
+		depotConfig.setCosts(averageRoutingCost + depotConfig.getOpeningCosts());
+			 
 		return true;
 	}
 	
@@ -256,11 +304,13 @@ public class LRPScenarios {
 		
 		for (int numCap: filterStages) {
 			reduceRemainingOptions(numCap);
-			double timeLimit = RUNTIME / (100 * filterStages.length * numCap);
+			double timeLimit = RUNTIME / (100 * (filterStages.length-1) * numCap);
 			int maxIterations = (int)Math.ceil(timeLimit * 10);
 			if (numCap == 1)
 				maxIterations = 3000;
+			//System.out.println(maxIterations + " " + numCap);
 			evaluateDepotConfigurations(maxIterations);
+			Collections.sort(remainingConfigurations);
 			logger.info("The best " + numCap + " configurations have been evaluated. Best objective value: " + remainingConfigurations.get(0).costs);
 		}		
 	}
@@ -299,11 +349,52 @@ public class LRPScenarios {
 	    
 	    Calendar cal = Calendar.getInstance();
         SimpleDateFormat sdf = new SimpleDateFormat("HH_mm_ss");
+        Random rand = new Random();
+        int randomNum = rand.nextInt(9999);
+        String path = "." + File.separator +"output" + File.separator + "Result_"+sdf.format(cal.getTime()) + String.valueOf(randomNum) + ".sol";
 
-	    try (FileWriter file = new FileWriter("." + File.separator +"output" + File.separator + "Result_"+sdf.format(cal.getTime())+".json")) {
+	    try (FileWriter file = new FileWriter(path)) {
 	        file.write(output.toJSONString());
+	        logger.info("Written solution.");
+	        logger.info(path);
 	    } catch (IOException e) {
 	    	logger.error("Output File could not be written. Check whether the output folder exists.");
+	    }
+	}
+	
+	
+public void writeValidation() {
+	
+		JSONObject output = new JSONObject();
+		output.put("NumOpenDepots", remainingConfigurations.get(0).openDepots.size());
+		
+		JSONArray openDepots = new JSONArray();
+	    for (DepotOption depot : remainingConfigurations.get(0).openDepots) {
+	    	openDepots.add(depot.getIndex());
+	    }
+	    output.put("OpenDepots", openDepots);
+
+	    JSONArray ObjectivePerScenario = new JSONArray();
+	    for (Double cost : solutionCostsPerScenario) {
+	    	ObjectivePerScenario.add(cost);
+	    }
+	    output.put("ObjectivePerScenario", ObjectivePerScenario);
+	    output.put("OpeningCost", confiCost);
+	    
+	    
+	    Calendar cal = Calendar.getInstance();
+        SimpleDateFormat sdf = new SimpleDateFormat("HH_mm_ss");
+        Random rand = new Random();
+        int randomNum = rand.nextInt(9999);
+        String path = "." + File.separator +"output" + File.separator + "Validation_"+sdf.format(cal.getTime()) + String.valueOf(randomNum) + ".val";
+
+
+	    try (FileWriter file = new FileWriter(path)) {
+	        file.write(output.toJSONString());
+	        logger.info("Validation completed.");
+	        logger.info(path);
+	    } catch (IOException e) {
+	    	logger.error("Validation File could not be written. Check whether the output folder exists.");
 	    }
 	}
 	
@@ -323,17 +414,64 @@ public class LRPScenarios {
         @Override
         public void run() {
             try {
+            	//for (Node node: depotConfiguration)
+            		//System.out.print(node.x + " ");
+            	//System.out.println();
             	mdvrp.setDepots(depotConfiguration);
             	mdvrp.constructStartingSolution();
             	mdvrp.checkSolution();
         		if (maxIterations > 0) {
-        			 mdvrp.optimizeRoutes(maxIterations, Double.MAX_VALUE, false);	            			 
+        			 mdvrp.optimizeRoutes(maxIterations, maxIterations*timeLimitPerIteration, false);	       			 
         		}
+        		//System.out.println(maxIterations);
+        		
+        		
             }catch (Exception ex){
                 ex.printStackTrace();}
         }
 	}
-    
+	
+	public void readSolution(String path) {
+		depotIndicesInSolution.clear();
+		try (FileReader reader = new FileReader(path)) {
+			JSONParser parser = new JSONParser();
+			JSONObject jsonObject = (JSONObject) parser.parse(reader);
+			
+			JSONArray openDepots = (JSONArray) jsonObject.get("OpenDepots");			
+			Iterator<Object> iterator = openDepots.iterator();
+		    while (iterator.hasNext()) {
+		    	Integer nextIndex = ((Long) iterator.next()).intValue();
+		    	depotIndicesInSolution.add(nextIndex);
+		    }				
+		} catch (IOException e) {
+			logger.error("The solution path " + path + " could not be found. Check path.");
+	    } catch (ParseException e) {
+	    	logger.error("The solution format is incorrect.");
+	    }	
+	}
+	
+	
+	public void setValidate() {
+		this.isValidation = true;
+	}
 
+	public void setMinCapacity(int minCapacity) {
+		this.minCapacity = minCapacity;
+	}
+	
+	public void setSolution() {
+		this.minCapacity = minCapacity;
+	}
+	
+	public boolean isValidation() {
+		return this.isValidation;
+	}
+	
+	public boolean hasMinCapacity() {
+		return this.minCapacity > 0;
+	}
+	public void settimeLimitPerIteration(double timeLimitPerIteration) {
+		this.timeLimitPerIteration = timeLimitPerIteration;
+	}
 
 }
